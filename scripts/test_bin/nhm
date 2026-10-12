@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Mock nhm for tests (fork, arosl; see FORK.md). nhm is ntm's herdr
+# counterpart; its robot flags answer with ntm's types. The shapes here are
+# the ones nhm v0.1.2 printed against its own stub herdr, cut to the fields
+# ru reads. Behavior is controlled by NTM_MOCK_SCENARIO, as for the ntm and
+# tmux mocks; the pane text comes from the tmux mock beside this file.
+# NHM_MOCK_KILL=1 answers `kill` (nhm.lifecycle); without it, `kill` is an
+# unknown command, as in nhm 0.1.2.
+
+set -uo pipefail
+
+scenario="${NTM_MOCK_SCENARIO:-ok}"
+state_file="${NTM_MOCK_STATE_FILE:-/tmp/ntm_mock_state}"
+prompt_file="${NTM_MOCK_LAST_PROMPT:-/tmp/ntm_mock_last_prompt}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+session_from_state() {
+    local session=""
+    [[ -f "$state_file" ]] && session=$(head -n 1 "$state_file")
+    echo "${session:-test}"
+}
+
+robot_fail() { # robot_fail <error_code> <error> [exit]
+    jq -cn --arg c "$1" --arg e "$2" --argjson x "${3:-1}" \
+        '{success: false, version: "1.0.0", output_format: "json", _meta: {exit_code: $x}, error: $e, error_code: $c}'
+    exit "${3:-1}"
+}
+
+# The value of --flag=V or --flag V among the arguments.
+flag_value() {
+    local name="$1"; shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "$name"=*) printf '%s' "${1#"$name"=}"; return 0 ;;
+            "$name") printf '%s' "${2:-}"; return 0 ;;
+        esac
+        shift
+    done
+    return 1
+}
+
+handle_spawn() {
+    local session="$1"; shift
+    case "$scenario" in
+        resource_busy) robot_fail RESOURCE_BUSY "session already exists" ;;
+        spawn_fail) robot_fail INTERNAL_ERROR "spawn failed" ;;
+    esac
+    local dir kind="claude"
+    dir=$(flag_value --spawn-dir "$@") || dir="$PWD"
+    flag_value --spawn-cod "$@" >/dev/null && kind="codex"
+    flag_value --spawn-agy "$@" >/dev/null && kind="agy"
+    printf '%s\n' "$session" > "$state_file"
+    jq -n --arg s "$session" --arg d "$dir" --arg k "$kind" '{
+        success: true, version: "1.0.0", output_format: "json",
+        session: $s, working_dir: $d, layout: "tiled", total_startup_ms: 0,
+        agents: [{pane: "0.1", type: $k, title: ($s + "__" + $k + "_1"), ready: true, startup_ms: 0}],
+        assignments: [], admission: {serialized: false, decision: "admit", reason: "", requested_agents: 1},
+        monitor_started: false}'
+}
+
+handle_send() {
+    local session="$1"; shift
+    local msg="" file
+    if file=$(flag_value --msg-file "$@"); then
+        if [[ "$file" == "-" ]]; then msg=$(cat); else msg=$(cat -- "$file"); fi
+    else
+        msg=$(flag_value --msg "$@") || msg=""
+    fi
+    [[ -n "$msg" ]] || robot_fail INVALID_FLAG "give --msg or --msg-file"
+    printf '%s' "$msg" > "$prompt_file"
+    if [[ "$scenario" == "agent_error" ]]; then
+        jq -n --arg s "$session" '{success: false, version: "1.0.0", output_format: "json",
+            session: $s, dry_run: false, blocked: false, targets: ["0.1"], successful: [],
+            failed: [{pane: "0.1", reason: "agent crashed"}], error: "1 of 1 targets failed", error_code: "AGENT_ERROR"}'
+        exit 1
+    fi
+    jq -n --arg s "$session" --arg m "$msg" '{success: true, version: "1.0.0", output_format: "json",
+        session: $s, dry_run: false, blocked: false, targets: ["0.1"], successful: ["0.1"], failed: [],
+        would_send_to: [], message_preview: ($m | .[0:80]),
+        operation: {operation_id: "op-mock-1", payload_bytes: ($m | utf8bytelength), status: "completed",
+            admissions: [{target: "0.1", state: "submitted"}]}}'
+}
+
+handle_ack() {
+    local session="$1"
+    case "$scenario" in
+        timeout)
+            jq -n --arg s "$session" '{success: false, version: "1.0.0", output_format: "json", session: $s,
+                confirmations: [], pending: ["0.1"], failed: [], timeout_ms: 1000, timed_out: true,
+                error: "no completion before the timeout", error_code: "TIMEOUT"}'
+            exit 1 ;;
+        agent_error)
+            jq -n --arg s "$session" '{success: false, version: "1.0.0", output_format: "json", session: $s,
+                confirmations: [], pending: [], failed: [{pane: "0.1", reason: "agent is blocked"}],
+                timeout_ms: 1000, timed_out: false, error: "1 agent cannot acknowledge", error_code: "AGENT_ERROR"}'
+            exit 1 ;;
+    esac
+    jq -n --arg s "$session" '{success: true, version: "1.0.0", output_format: "json", session: $s,
+        confirmations: [{pane: "0.1", ack_type: "prompt_returned", ack_at: "2026-10-12T00:00:00Z", latency_ms: 1200}],
+        pending: [], failed: [], timeout_ms: 300000, timed_out: false}'
+}
+
+handle_activity() {
+    local session="$1" state="WAITING" velocity=0
+    if [[ "$scenario" == "generating" ]]; then state="GENERATING"; velocity=150.5; fi
+    jq -n --arg s "$session" --arg st "$state" --argjson v "$velocity" '{success: true, version: "1.0.0",
+        output_format: "json", session: $s,
+        agents: [{pane: "0.1", pane_idx: 1, agent_type: "claude", state: $st, confidence: 0.9, velocity: $v,
+            observation_state: "live", safe_to_dispatch: ($st == "WAITING")}]}'
+}
+
+handle_tail() {
+    local session="$1"
+    "$here/tmux" capture-pane -t "${session}:0.1" -p | jq -Rn --arg s "$session" '{success: true,
+        version: "1.0.0", output_format: "json", session: $s,
+        panes: {"0.1": {type: "claude", state: "idle", lines: [inputs], truncated: false}}}'
+}
+
+handle_status() {
+    jq -n --arg s "$(session_from_state)" '{success: true, version: "1.0.0", output_format: "json",
+        schema_id: "ntm:robot:status:v1", schema_version: "ntm.robot.status.v2",
+        sessions: [{name: $s, attached: true, agent_count: 1, health: {status: "healthy"}}],
+        summary: {total_sessions: 1, total_agents: 1}}'
+}
+
+handle_health() {
+    local session="$1" status="healthy"
+    [[ "$scenario" == "unhealthy" ]] && status="degraded"
+    jq -n --arg s "$session" --arg st "$status" '{schema: "nhm.v1", command: "health",
+        result: {overall_status: "ok", sessions: [{name: $s, agent_count: 1,
+            health: ({status: $st} + (if $st == "healthy" then {} else {reason: "1 agent waits for an answer"} end))}]},
+        warnings: [], error: null}'
+}
+
+cmd="${1:-}"
+[[ $# -gt 0 ]] && shift
+case "$cmd" in
+    --version|version) echo "nhm 0.1.2 (mock)" ;;
+    --robot-status) handle_status ;;
+    --robot-spawn=*) handle_spawn "${cmd#--robot-spawn=}" "$@" ;;
+    --robot-send=*) handle_send "${cmd#--robot-send=}" "$@" ;;
+    --robot-ack=*) handle_ack "${cmd#--robot-ack=}" ;;
+    --robot-activity=*) handle_activity "${cmd#--robot-activity=}" ;;
+    --robot-tail=*) handle_tail "${cmd#--robot-tail=}" ;;
+    send)
+        # The native verb: nhm send <session> [selector] --file F
+        session="${1:-}"; shift || true
+        file=$(flag_value --file "$@") || file=""
+        [[ -n "$file" && -f "$file" ]] || { echo "nhm: give the prompt" >&2; exit 2; }
+        cp -- "$file" "$prompt_file"
+        echo "0.1 submitted"
+        ;;
+    health) handle_health "${1:-}" ;;
+    interrupt)
+        jq -n --arg s "${1:-}" '{schema: "nhm.v1", command: "interrupt",
+            result: {operation_id: "op-mock-int", targets: [{slot: "0.1", status: "submitted"}]}, warnings: [], error: null}'
+        ;;
+    kill)
+        if [[ "${NHM_MOCK_KILL:-}" != "1" ]]; then
+            echo 'nhm: unknown command "kill"' >&2
+            exit 2
+        fi
+        rm -f -- "$state_file"
+        ;;
+    --robot-*=*|--robot-*)
+        robot_fail NOT_IMPLEMENTED "${cmd%%=*} is not in this nhm" 2
+        ;;
+    *)
+        echo "mock nhm: unhandled args: $cmd $*" >&2
+        exit 2
+        ;;
+esac

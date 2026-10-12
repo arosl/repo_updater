@@ -1427,10 +1427,10 @@ spawn_ai_session() {
         return 2
     fi
 
-    # Check ntm availability
-    if ! command -v ntm &>/dev/null; then
-        log_error "spawn_ai_session: ntm not installed"
-        echo '{"session":"","status":"failed","error":"ntm not installed"}'
+    # Check nhm availability (fork, arosl: nhm is ntm's herdr counterpart)
+    if ! command -v nhm &>/dev/null; then
+        log_error "spawn_ai_session: nhm not installed"
+        echo '{"session":"","status":"failed","error":"nhm not installed"}'
         return 2
     fi
 
@@ -1441,14 +1441,14 @@ spawn_ai_session() {
     timestamp=$(date +%s)
     local session_name="${session_prefix}-${repo_name}-${timestamp}"
 
-    # Map agent type to ntm flags
-    # agent_flag is for spawn (--cc=1), send_flag is for send (--cc)
+    # Map agent type to nhm flags
+    # agent_flag is for spawn (--spawn-cc=1), send_flag is for send (--cc).
+    # Fork (arosl): nhm has no gemini kind.
     local agent_flag send_flag
     case "$agent_type" in
-        claude|cc)  agent_flag="--cc=1"; send_flag="--cc" ;;
-        codex|cod)  agent_flag="--cod=1"; send_flag="--cod" ;;
-        antigravity|agy) agent_flag="--agy=1"; send_flag="--agy" ;;
-        gemini|gmi) agent_flag="--gmi=1"; send_flag="--gmi" ;;
+        claude|cc)  agent_flag="--spawn-cc=1"; send_flag="--cc" ;;
+        codex|cod)  agent_flag="--spawn-cod=1"; send_flag="--cod" ;;
+        antigravity|agy) agent_flag="--spawn-agy=1"; send_flag="--agy" ;;
         *)
             log_error "spawn_ai_session: Unknown agent type: $agent_type"
             echo '{"session":"","status":"failed","error":"unknown agent type"}'
@@ -1459,26 +1459,20 @@ spawn_ai_session() {
     local start_time
     start_time=$(date +%s)
 
-    # Spawn the session with initial prompt
-    log_info "Spawning ntm session: $session_name"
-    if ! ntm spawn "$session_name" $agent_flag --no-user 2>/dev/null; then
+    # Spawn the session in the repo directory (fork, arosl: --spawn-dir
+    # takes the place of a tmux cd) and wait until the agent is ready
+    log_info "Spawning nhm session: $session_name"
+    if ! nhm --robot-spawn="$session_name" "$agent_flag" --spawn-no-user --spawn-wait \
+            --spawn-dir="$repo_path" >/dev/null 2>&1; then
         log_error "spawn_ai_session: Failed to spawn session"
         echo '{"session":"'"$session_name"'","status":"failed","error":"spawn failed"}'
         return 2
     fi
 
-    # Change to repo directory and send the prompt
-    # Use tmux to cd first, then send the prompt file contents
-    local pane_target="${session_name}:0.0"
-
-    # CD to repo directory
-    tmux send-keys -t "$pane_target" "cd $(printf '%q' "$repo_path")" Enter 2>/dev/null
-    sleep 1
-
     # Send the prompt from file
-    if ! ntm send "$session_name" $send_flag --file "$prompt_file" 2>/dev/null; then
+    if ! nhm send "$session_name" "$send_flag" --file "$prompt_file" >/dev/null 2>&1; then
         log_error "spawn_ai_session: Failed to send prompt"
-        ntm kill "$session_name" --force 2>/dev/null
+        nhm kill "$session_name" --force >/dev/null 2>&1
         echo '{"session":"'"$session_name"'","status":"failed","error":"send prompt failed"}'
         return 2
     fi
@@ -1496,30 +1490,26 @@ spawn_ai_session() {
         elapsed=$((elapsed + poll_interval))
 
         # Check if session still exists
-        if ! tmux has-session -t "$session_name" 2>/dev/null; then
+        if ! nhm_session_exists "$session_name"; then
             status="completed"
             break
         fi
 
-        # Check agent health
-        local health_output
-        health_output=$(ntm health "$session_name" --json 2>/dev/null)
+        # Check agent activity. Fork (arosl): nhm's --robot-activity is ntm's
+        # ActivityOutput; WAITING is ntm's idle prompt, STALLED its stale.
+        local activity
+        activity=$(nhm --robot-activity="$session_name" 2>/dev/null | \
+            jq -r '.agents[0].state // "UNKNOWN"' 2>/dev/null)
 
-        if [[ -n "$health_output" ]]; then
-            # Check if agent is idle (no recent activity)
-            local activity
-            activity=$(echo "$health_output" | jq -r '.panes[0].activity // "unknown"' 2>/dev/null)
+        if [[ "$activity" == "WAITING" || "$activity" == "IDLE" || "$activity" == "STALLED" ]]; then
+            # Agent appears to be done - give it a moment then check again
+            sleep 5
+            activity=$(nhm --robot-activity="$session_name" 2>/dev/null | \
+                jq -r '.agents[0].state // "UNKNOWN"' 2>/dev/null)
 
-            if [[ "$activity" == "idle" || "$activity" == "stale" ]]; then
-                # Agent appears to be done - give it a moment then check again
-                sleep 5
-                health_output=$(ntm health "$session_name" --json 2>/dev/null)
-                activity=$(echo "$health_output" | jq -r '.panes[0].activity // "unknown"' 2>/dev/null)
-
-                if [[ "$activity" == "idle" || "$activity" == "stale" ]]; then
-                    status="completed"
-                    break
-                fi
+            if [[ "$activity" == "WAITING" || "$activity" == "IDLE" || "$activity" == "STALLED" ]]; then
+                status="completed"
+                break
             fi
         fi
 
@@ -1530,9 +1520,9 @@ spawn_ai_session() {
     end_time=$(date +%s)
     local duration=$((end_time - start_time))
 
-    # Clean up the session
-    if tmux has-session -t "$session_name" 2>/dev/null; then
-        ntm kill "$session_name" --force 2>/dev/null
+    # Clean up the session (fork, arosl: nhm's kill comes with nhm.lifecycle)
+    if nhm_session_exists "$session_name"; then
+        nhm kill "$session_name" --force >/dev/null 2>&1
     fi
 
     # Return results
@@ -1552,7 +1542,7 @@ spawn_ai_session() {
 # Returns: 0 if active, 1 if not
 is_session_active() {
     local session_name="$1"
-    [[ -n "$session_name" ]] && tmux has-session -t "$session_name" 2>/dev/null
+    [[ -n "$session_name" ]] && nhm_session_exists "$session_name"
 }
 
 # Kill an ntm session forcefully.
@@ -1566,7 +1556,7 @@ kill_ai_session() {
     fi
 
     if is_session_active "$session_name"; then
-        ntm kill "$session_name" --force 2>/dev/null
+        nhm kill "$session_name" --force >/dev/null 2>&1
         return $?
     fi
     return 0
@@ -1928,9 +1918,9 @@ cmd_ai_sync() {
     done
 
     # Check dependencies
-    if ! command -v ntm &>/dev/null; then
-        log_error "ai-sync requires ntm (Named Tmux Manager) to be installed"
-        log_error "Install from: https://github.com/Dicklesworthstone/ntm"
+    if ! command -v nhm &>/dev/null; then
+        log_error "ai-sync requires nhm (ntm's herdr counterpart) to be installed"
+        log_error "Install from: https://github.com/arosl/nhm"
         return 3
     fi
 
@@ -2196,9 +2186,9 @@ cmd_dep_update() {
     done
 
     # Check dependencies
-    if ! command -v ntm &>/dev/null; then
-        log_error "dep-update requires ntm (Named Tmux Manager)"
-        log_error "Install from: https://github.com/Dicklesworthstone/ntm"
+    if ! command -v nhm &>/dev/null; then
+        log_error "dep-update requires nhm (ntm's herdr counterpart)"
+        log_error "Install from: https://github.com/arosl/nhm"
         return 3
     fi
 
@@ -2812,14 +2802,35 @@ capture_pane_output() {
     [[ -z "$session" ]] && return 1
 
     # Check if session exists
-    if ! tmux has-session -t "$session" 2>/dev/null; then
+    if ! nhm_session_exists "$session"; then
         log_warn "Session '$session' not found"
         return 1
     fi
 
     # Capture pane output (pane 1 is the agent pane in our layout)
-    # -p: print to stdout, -S: start line (negative = from scrollback)
-    tmux capture-pane -t "${session}:0.1" -p -S -"$lines" 2>/dev/null
+    nhm_pane_lines "$session" "$lines"
+}
+
+# Fork (arosl): an nhm session is a herdr workspace, not a tmux session.
+# Usage: nhm_session_exists session_name
+# Returns: 0 if nhm --robot-status lists the session
+nhm_session_exists() {
+    local session="${1:-}"
+    [[ -n "$session" ]] || return 1
+    nhm --robot-status 2>/dev/null | \
+        jq -e --arg s "$session" 'any(.sessions[]?; .name == $s)' >/dev/null 2>&1
+}
+
+# Fork (arosl): print the last lines of a session's agent pane through
+# nhm --robot-tail: slot 0.1, the agent pane of ntm's layout, else the
+# first pane nhm lists.
+# Usage: nhm_pane_lines session_name [lines]
+nhm_pane_lines() {
+    local session="${1:-}"
+    local lines="${2:-400}"
+    [[ -n "$session" ]] || return 1
+    nhm --robot-tail="$session" --lines="$lines" 2>/dev/null | \
+        jq -er '(.panes["0.1"] // ([.panes[]?] | first)) | .lines[]' 2>/dev/null
 }
 
 # Extract all plans from pane output
@@ -4152,12 +4163,8 @@ capture_pane_tail() {
     [[ -z "$session" || -z "$output_file" ]] && return 1
 
     # Capture pane content - pane 1 is typically the agent workspace
-    # Use negative -S value to scroll back from current position
-    if tmux has-session -t "$session" 2>/dev/null; then
-        tmux capture-pane -t "${session}:0.1" -p -S -"$lines" > "$output_file" 2>/dev/null || {
-            # Fallback: try pane 0 if pane 1 doesn't exist
-            tmux capture-pane -t "${session}:0.0" -p -S -"$lines" > "$output_file" 2>/dev/null || true
-        }
+    if nhm_session_exists "$session"; then
+        nhm_pane_lines "$session" "$lines" > "$output_file" 2>/dev/null || true
     else
         echo "(session not found: $session)" > "$output_file"
     fi
@@ -5106,8 +5113,8 @@ error_ntm_spawn_failed() {
         "Failed to start AI agent session" \
         "$reason" \
         "Ensure ANTHROPIC_API_KEY or OPENAI_API_KEY is set
-Run: ntm doctor
-Check: ntm list (to see running sessions)"
+Run: nhm doctor
+Check: nhm list (to see running sessions)"
 }
 
 error_ntm_no_api_key() {
@@ -9495,13 +9502,14 @@ cmd_doctor() {
         printf '%b\n' "${DIM}[  ]${RESET} gum: not installed (optional, for prettier UI)" >&2
     fi
 
-    # Check ntm (optional, for ai-sync and dep-update)
-    if command -v ntm &>/dev/null; then
+    # Check nhm (optional, for ai-sync and dep-update; fork, arosl: ntm's
+    # herdr counterpart)
+    if command -v nhm &>/dev/null; then
         local ntm_version
-        ntm_version=$(ntm --version 2>/dev/null | head -1 || echo "unknown")
-        printf '%b\n' "${GREEN}[OK]${RESET} ntm: $ntm_version" >&2
+        ntm_version=$(nhm --version 2>/dev/null | head -1 || echo "unknown")
+        printf '%b\n' "${GREEN}[OK]${RESET} nhm: $ntm_version" >&2
     else
-        printf '%b\n' "${DIM}[  ]${RESET} ntm: not installed (optional, for ai-sync/dep-update)" >&2
+        printf '%b\n' "${DIM}[  ]${RESET} nhm: not installed (optional, for ai-sync/dep-update)" >&2
     fi
 
     # Check claude-code (optional, for ai-sync and dep-update)
@@ -9588,19 +9596,19 @@ cmd_doctor() {
             printf '%b\n' "${YELLOW}[??]${RESET} tmux: not installed (required for local driver)" >&2
         fi
 
-        if command -v ntm &>/dev/null; then
-            if ntm --help 2>&1 | grep -q "robot"; then
-                printf '%b\n' "${GREEN}[OK]${RESET} ntm: robot mode available" >&2
+        if command -v nhm &>/dev/null; then
+            if nhm --robot-status >/dev/null 2>&1; then
+                printf '%b\n' "${GREEN}[OK]${RESET} nhm: robot mode available" >&2
                 ntm_available="true"
             else
-                printf '%b\n' "${YELLOW}[??]${RESET} ntm: installed but robot mode unavailable" >&2
+                printf '%b\n' "${YELLOW}[??]${RESET} nhm: installed but robot mode unavailable" >&2
             fi
         else
-            printf '%b\n' "${DIM}[  ]${RESET} ntm: not installed (optional)" >&2
+            printf '%b\n' "${DIM}[  ]${RESET} nhm: not installed (optional)" >&2
         fi
 
         if [[ "$tmux_available" != "true" && "$ntm_available" != "true" ]]; then
-            printf '%b\n' "${RED}[!!]${RESET} review driver: no tmux or ntm available" >&2
+            printf '%b\n' "${RED}[!!]${RESET} review driver: no tmux or nhm available" >&2
             ((review_issues++))
         fi
 
@@ -11140,8 +11148,8 @@ detect_review_driver() {
             echo "ntm"
             return
         fi
-    elif command -v ntm &>/dev/null; then
-        if ntm --robot-status &>/dev/null; then
+    elif command -v nhm &>/dev/null; then
+        if nhm --robot-status &>/dev/null; then
             echo "ntm"
             return
         fi
@@ -13421,11 +13429,12 @@ local_driver_session_alive() {
 #   elif [[ $ntm_status -eq 2 ]]; then log_error "ntm robot mode broken"; return 3
 #   fi
 ntm_check_available() {
-    if ! command -v ntm &>/dev/null; then
+    # Fork (arosl): the ntm driver runs nhm, ntm's herdr counterpart (FORK.md).
+    if ! command -v nhm &>/dev/null; then
         return 1  # Not installed
     fi
     # Verify robot mode works (fast, side-effect-free check)
-    if ! ntm --robot-status &>/dev/null; then
+    if ! nhm --robot-status &>/dev/null; then
         return 2  # Installed but not functional
     fi
     return 0  # Available and functional
@@ -13464,7 +13473,7 @@ ntm_spawn_session() {
     [[ ! -d "$workdir" ]] && { echo '{"success":false,"error":"workdir does not exist"}'; return 1; }
 
     # Spawn with wait-for-ready using robot mode
-    if output=$(ntm --robot-spawn="$session" \
+    if output=$(nhm --robot-spawn="$session" \
         --spawn-cc=1 \
         --spawn-wait \
         --spawn-dir="$workdir" \
@@ -13483,10 +13492,12 @@ ntm_spawn_session() {
     fi
 }
 
-# Send a prompt to a Claude Code session, handling large prompts via chunking.
+# Send a prompt to a Claude Code session.
 # Usage: ntm_send_prompt session prompt
 # Returns: JSON response on stdout
-# Prompts >4KB are automatically chunked to avoid tmux SendKeys limits.
+# Fork (arosl): nhm sends the whole prompt as one herdr prompt, read from
+# stdin; it has no tmux SendKeys limit, and a chunk would be a prompt of
+# its own.
 ntm_send_prompt() {
     local session="${1:-}"
     local prompt="${2:-}"
@@ -13495,15 +13506,8 @@ ntm_send_prompt() {
     [[ -z "$session" ]] && { echo '{"success":false,"error":"session name required"}'; return 1; }
     [[ -z "$prompt" ]] && { echo '{"success":false,"error":"prompt required"}'; return 1; }
 
-    # Check prompt size - tmux has ~4KB practical limit per SendKeys call
-    if [[ ${#prompt} -gt 4000 ]]; then
-        log_warn "Prompt is ${#prompt} chars (>4KB), sending in chunks"
-        ntm_send_prompt_chunked "$session" "$prompt"
-        return $?
-    fi
-
-    if output=$(ntm --robot-send="$session" \
-        --msg="$prompt" \
+    if output=$(printf '%s' "$prompt" | nhm --robot-send="$session" \
+        --msg-file=- \
         --type=claude 2>&1); then
         echo "$output"
         return 0
@@ -13516,30 +13520,6 @@ ntm_send_prompt() {
         fi
         return $exit_code
     fi
-}
-
-# Send a large prompt in chunks to avoid tmux SendKeys limits.
-# Internal helper for ntm_send_prompt.
-ntm_send_prompt_chunked() {
-    local session="${1:-}"
-    local prompt="${2:-}"
-    local chunk_size=3500  # Leave buffer below 4KB limit
-    local offset=0
-    local length=${#prompt}
-
-    while [[ $offset -lt $length ]]; do
-        local chunk="${prompt:$offset:$chunk_size}"
-        if ! ntm --robot-send="$session" --msg="$chunk" --type=claude &>/dev/null; then
-            echo "{\"success\":false,\"error\":\"chunk send failed at offset $offset\"}"
-            return 1
-        fi
-        ((offset += chunk_size))
-        # Small delay between chunks to let terminal process
-        sleep 0.1
-    done
-
-    echo '{"success":true,"chunked":true}'
-    return 0
 }
 
 # Wait for Claude Code agent to complete work and return to idle state.
@@ -13557,14 +13537,21 @@ ntm_wait_completion() {
 
     [[ -z "$session" ]] && { echo '{"success":false,"error":"session name required"}'; return 1; }
 
-    # Use --transition to ensure we wait for a full processing cycle:
-    # agent must leave WAITING (start processing) and return to WAITING (finish)
-    output=$(ntm --robot-wait="$session" \
-        --condition=idle \
-        --wait-timeout="${timeout}s" \
-        --exit-on-error \
-        --transition 2>&1)
+    # Wait for a full processing cycle. Fork (arosl): nhm's --robot-ack waits
+    # for the completion of the session's latest send, as ntm's --robot-wait
+    # --transition waited for the agent to leave WAITING and return to it.
+    # Its exit code is 0 or 1; ru's codes come from its answer.
+    output=$(nhm --robot-ack="$session" --timeout="${timeout}s" 2>&1)
     exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        if [[ "$(jq -r '.timed_out // false' <<<"$output" 2>/dev/null)" == "true" ]]; then
+            exit_code=1
+        elif [[ "$(jq -r '(.failed // []) | length' <<<"$output" 2>/dev/null)" =~ ^[1-9] ]]; then
+            exit_code=3
+        else
+            exit_code=2
+        fi
+    fi
 
     if [[ -n "$output" ]]; then
         echo "$output"
@@ -13585,8 +13572,9 @@ ntm_wait_completion() {
 ntm_kill_session() {
     local session="${1:-}"
     [[ -z "$session" ]] && return 0
-    # -f flag prevents confirmation prompt
-    ntm kill "$session" -f 2>/dev/null || true
+    # -f flag prevents confirmation prompt. Fork (arosl): nhm's kill comes
+    # with nhm.lifecycle; until then this leaves the session open (FORK.md).
+    nhm kill "$session" -f >/dev/null 2>&1 || true
     return 0
 }
 
@@ -13597,7 +13585,8 @@ ntm_kill_session() {
 ntm_interrupt_session() {
     local session="${1:-}"
     [[ -z "$session" ]] && return 1
-    ntm --robot-interrupt="$session" 2>/dev/null || return 1
+    # Fork (arosl): nhm interrupts with each agent's own interrupt key.
+    nhm interrupt "$session" --json >/dev/null 2>&1 || return 1
     return 0
 }
 
@@ -13609,8 +13598,8 @@ cleanup_agent_sweep_sessions() {
 
     local sessions session
     # Find sessions matching our naming pattern with our PID
-    sessions=$(ntm --robot-status 2>/dev/null | \
-        grep -oE '"name":"ru_sweep_[^"]*"' | cut -d'"' -f4) || true
+    sessions=$(nhm --robot-status 2>/dev/null | \
+        jq -r '.sessions[]?.name | select(startswith("ru_sweep_"))' 2>/dev/null) || true
 
     # Disable glob expansion for safe iteration over session names
     set -f
@@ -13725,7 +13714,7 @@ ntm_get_activity() {
         echo '{"success":false,"error":"session name required"}'
         return 1
     }
-    ntm --robot-activity="$session" 2>/dev/null
+    nhm --robot-activity="$session" 2>/dev/null
 }
 
 # ntm driver: Start a new Claude Code session
@@ -13757,20 +13746,22 @@ ntm_driver_start_session() {
 }
 EOF
 
-    # Use ntm robot-spawn to create session
+    # Use robot-spawn to create the session. Fork (arosl): nhm's ntm-typed
+    # --robot-spawn waits for the agent; the prompt follows as one send.
     local spawn_result
-    if ! spawn_result=$(ntm --robot-spawn "$session_name" --dir "$wt_path" --prompt "$prompt" 2>&1); then
-        log_error "ntm spawn failed: $spawn_result"
+    if ! spawn_result=$(nhm --robot-spawn="$session_name" --spawn-cc=1 --spawn-wait \
+            --spawn-dir="$wt_path" 2>&1); then
+        log_error "nhm spawn failed: $spawn_result"
+        return 1
+    fi
+    if ! ntm_driver_send_to_session "$session_name" "$prompt"; then
+        log_error "nhm send failed for session: $session_name"
         return 1
     fi
 
-    # Parse spawn result for pane info
+    # Parse spawn result for the agent's pane (ntm's N.M slot)
     local pane_id
-    pane_id=$(echo "$spawn_result" | jq -r '.panes[0] // empty' 2>/dev/null)
-
-    if [[ -z "$pane_id" ]]; then
-        pane_id=$(tmux list-panes -t "$session_name" -F "#{pane_id}" 2>/dev/null | head -1)
-    fi
+    pane_id=$(echo "$spawn_result" | jq -r '.agents[0].pane // empty' 2>/dev/null)
 
     # Update state to running
     cat > "$state_file" <<EOF
@@ -13794,33 +13785,21 @@ ntm_driver_send_to_session() {
     local session_id="$1"
     local message="$2"
 
-    # Get pane ID from ntm status
-    local pane_id
-    pane_id=$(ntm --robot-status 2>/dev/null | jq -r ".sessions[\"$session_id\"].panes[0] // empty" 2>/dev/null)
-
-    if [[ -z "$pane_id" ]]; then
-        pane_id=$(tmux list-panes -t "$session_id" -F "#{pane_id}" 2>/dev/null | head -1)
-    fi
-
-    if [[ -z "$pane_id" ]]; then
-        log_error "Cannot find pane for session: $session_id"
-        return 1
-    fi
-
-    # Use ntm robot-send for delivery confirmation
+    # Use robot-send for delivery confirmation. Fork (arosl): nhm selects the
+    # session's Claude agent and reads the message from stdin; there is no
+    # tmux session to fall back to.
     local send_result
-    if send_result=$(ntm --robot-send --pane="$pane_id" --msg="$message" 2>&1); then
-        local delivered
-        delivered=$(echo "$send_result" | jq -r '.delivered // false' 2>/dev/null)
-        if [[ "$delivered" == "true" ]]; then
+    if send_result=$(printf '%s' "$message" | nhm --robot-send="$session_id" --type=claude \
+            --msg-file=- 2>&1); then
+        local submitted
+        submitted=$(echo "$send_result" | jq -r '(.successful // []) | length' 2>/dev/null)
+        if [[ "$submitted" =~ ^[1-9] ]]; then
             return 0
         fi
     fi
 
-    # Fallback: direct tmux send
-    log_verbose "Falling back to direct tmux send for $session_id"
-    tmux send-keys -t "$session_id" "$message" Enter
-    return $?
+    log_error "nhm send failed for session $session_id: $send_result"
+    return 1
 }
 
 # Map ntm activity state to unified state
@@ -13841,7 +13820,7 @@ ntm_map_state() {
 ntm_driver_get_session_state() {
     local session_id="$1"
 
-    if ! tmux has-session -t "$session_id" 2>/dev/null; then
+    if ! nhm_session_exists "$session_id"; then
         cat <<EOF
 {
   "session_id": "$session_id",
@@ -13853,15 +13832,12 @@ EOF
         return 0
     fi
 
-    local pane_id
-    pane_id=$(ntm --robot-status 2>/dev/null | jq -r ".sessions[\"$session_id\"].panes[0] // empty" 2>/dev/null)
-    if [[ -z "$pane_id" ]]; then
-        pane_id=$(tmux list-panes -t "$session_id" -F "#{pane_id}" 2>/dev/null | head -1)
-    fi
-
-    local activity_json
-    if activity_json=$(ntm --robot-activity="$pane_id" 2>/dev/null); then
+    # Fork (arosl): nhm's --robot-activity is ntm's ActivityOutput, one
+    # entry per agent in .agents[]; the session's agent is the first.
+    local activity_json pane_id=""
+    if activity_json=$(nhm --robot-activity="$session_id" 2>/dev/null | jq -ce '.agents[0]' 2>/dev/null); then
         local ntm_state velocity confidence unified_state
+        pane_id=$(echo "$activity_json" | jq -r '.pane // ""')
         ntm_state=$(echo "$activity_json" | jq -r '.state // "UNKNOWN"')
         velocity=$(echo "$activity_json" | jq -r '.velocity // 0')
         confidence=$(echo "$activity_json" | jq -r '.confidence // 0')
@@ -13895,8 +13871,9 @@ EOF
 # ntm driver: Stop a session
 ntm_driver_stop_session() {
     local session_id="$1"
-    if tmux has-session -t "$session_id" 2>/dev/null; then
-        tmux kill-session -t "$session_id" 2>/dev/null
+    if nhm_session_exists "$session_id"; then
+        # Fork (arosl): nhm's kill comes with nhm.lifecycle (FORK.md).
+        nhm kill "$session_id" -f >/dev/null 2>&1
         return $?
     fi
     return 0
@@ -13905,8 +13882,8 @@ ntm_driver_stop_session() {
 # ntm driver: Interrupt/pause a session
 ntm_driver_interrupt_session() {
     local session_id="$1"
-    if tmux has-session -t "$session_id" 2>/dev/null; then
-        tmux send-keys -t "$session_id" C-c
+    if nhm_session_exists "$session_id"; then
+        nhm interrupt "$session_id" --json >/dev/null 2>&1
         return $?
     fi
     return 1
@@ -13917,18 +13894,16 @@ ntm_driver_interrupt_session() {
 ntm_driver_stream_events() {
     local session_id="$1" callback="$2"
     local poll_interval="${3:-2}"
-    local last_state="" pane_id
-
-    pane_id=$(ntm --robot-status 2>/dev/null | jq -r ".sessions[\"$session_id\"].panes[0] // empty" 2>/dev/null)
+    local last_state=""
 
     while true; do
-        if ! tmux has-session -t "$session_id" 2>/dev/null; then
+        if ! nhm_session_exists "$session_id"; then
             $callback "session_end" '{"reason": "session terminated"}'
             break
         fi
 
         local activity_json
-        if activity_json=$(ntm --robot-activity="$pane_id" 2>/dev/null); then
+        if activity_json=$(nhm --robot-activity="$session_id" 2>/dev/null | jq -ce '.agents[0]' 2>/dev/null); then
             local current_state
             current_state=$(echo "$activity_json" | jq -r '.state // "UNKNOWN"')
 
@@ -13944,13 +13919,15 @@ ntm_driver_stream_events() {
             fi
         fi
 
-        local health_json
-        if health_json=$(ntm --robot-health="$session_id" 2>/dev/null); then
-            local alert_count
-            alert_count=$(echo "$health_json" | jq '.alerts | length' 2>/dev/null || echo "0")
-            if [[ "$alert_count" -gt 0 ]]; then
-                $callback "health_alert" "$(echo "$health_json" | jq -c '.alerts')"
-            fi
+        # Fork (arosl): nhm health has no alerts list; the session's own
+        # health, when it is not healthy, is the alert. nhm health exits
+        # non-zero on a critical status, so its output is read either way.
+        local health_json alerts
+        health_json=$(nhm health "$session_id" --json 2>/dev/null) || true
+        alerts=$(echo "$health_json" | jq -c --arg s "$session_id" \
+            '[.result.sessions[]? | select(.name == $s and .health.status != "healthy") | .health]' 2>/dev/null)
+        if [[ -n "$alerts" && "$alerts" != "[]" ]]; then
+            $callback "health_alert" "$alerts"
         fi
 
         sleep "$poll_interval"
@@ -13960,17 +13937,17 @@ ntm_driver_stream_events() {
 # ntm driver: List all sessions managed by ntm
 ntm_driver_list_sessions() {
     local status_json
-    if ! status_json=$(ntm --robot-status 2>/dev/null); then
+    if ! status_json=$(nhm --robot-status 2>/dev/null); then
         return 1
     fi
-    echo "$status_json" | jq -r '.sessions | keys[]' 2>/dev/null
+    # Fork (arosl): .sessions is ntm's array of session headers.
+    echo "$status_json" | jq -r '.sessions[]?.name' 2>/dev/null
 }
 
 # ntm driver: Check if session is alive
 ntm_driver_session_alive() {
     local session_id="$1"
-    tmux has-session -t "$session_id" 2>/dev/null
-    return $?
+    nhm_session_exists "$session_id"
 }
 
 # Override stub functions when ntm driver is loaded

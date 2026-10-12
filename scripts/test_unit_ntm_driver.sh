@@ -28,6 +28,43 @@ source_ru_function "is_git_repo"
 source_ru_function "repo_is_dirty"
 source_ru_function "has_uncommitted_changes"
 source_ru_function "is_file_denied"
+# Fork (arosl): the ntm driver on nhm, against scripts/test_bin/nhm
+source_ru_function "ntm_is_available"
+source_ru_function "ensure_dir"
+source_ru_function "nhm_session_exists"
+source_ru_function "nhm_pane_lines"
+source_ru_function "capture_pane_output"
+source_ru_function "ntm_spawn_session"
+source_ru_function "ntm_send_prompt"
+source_ru_function "ntm_wait_completion"
+source_ru_function "ntm_kill_session"
+source_ru_function "ntm_interrupt_session"
+source_ru_function "cleanup_agent_sweep_sessions"
+source_ru_function "ntm_map_state"
+source_ru_function "ntm_check_available"
+
+# source_ru_function ends a function at the first "}" in column 0, which a
+# heredoc's JSON can hold; this one skips heredoc bodies.
+source_ru_function_with_heredocs() {
+    local func_body
+    func_body=$(awk -v fn="$1" '
+        $0 ~ "^" fn "\\(\\) \\{" { on = 1 }
+        !on { next }
+        { print }
+        heredoc != "" { if ($0 == heredoc) heredoc = ""; next }
+        match($0, /<<-?[[:space:]]*'"'"'?[A-Z_]+'"'"'?/) {
+            heredoc = substr($0, RSTART, RLENGTH); gsub(/[<'"'"' -]/, "", heredoc); next
+        }
+        /^}$/ { exit }
+    ' "$(get_project_dir)/ru")
+    eval "$func_body"
+}
+source_ru_function_with_heredocs "ntm_driver_start_session"
+source_ru_function "ntm_driver_send_to_session"
+source_ru_function_with_heredocs "ntm_driver_get_session_state"
+source_ru_function "ntm_driver_list_sessions"
+source_ru_function "ntm_driver_session_alive"
+source_ru_function "ntm_driver_stream_events"
 
 # Define the denylist patterns (needed for is_file_denied tests)
 # This matches the patterns in ru's AGENT_SWEEP_DENYLIST_PATTERNS array
@@ -313,15 +350,16 @@ test_ntm_check_available_with_mock() {
     local temp_bin
     temp_bin=$(create_temp_dir)
 
-    # Create mock ntm that responds to --robot-status
-    cat > "$temp_bin/ntm" << 'MOCK_EOF'
+    # Create mock nhm (fork, arosl: the ntm driver runs nhm) that responds
+    # to --robot-status
+    cat > "$temp_bin/nhm" << 'MOCK_EOF'
 #!/usr/bin/env bash
 case "$1" in
     --robot-status) echo '{"success":true}'; exit 0 ;;
     *) exit 1 ;;
 esac
 MOCK_EOF
-    chmod +x "$temp_bin/ntm"
+    chmod +x "$temp_bin/nhm"
 
     local old_path="$PATH"
     PATH="$temp_bin:$PATH"
@@ -342,12 +380,12 @@ test_ntm_check_available_broken() {
     local temp_bin
     temp_bin=$(create_temp_dir)
 
-    # Create mock ntm that fails on --robot-status
-    cat > "$temp_bin/ntm" << 'MOCK_EOF'
+    # Create mock nhm that fails on --robot-status
+    cat > "$temp_bin/nhm" << 'MOCK_EOF'
 #!/usr/bin/env bash
 exit 1
 MOCK_EOF
-    chmod +x "$temp_bin/ntm"
+    chmod +x "$temp_bin/nhm"
 
     local old_path="$PATH"
     PATH="$temp_bin:$PATH"
@@ -619,6 +657,164 @@ test_is_file_denied_extra_patterns() {
 }
 
 #==============================================================================
+# The ntm driver on nhm (fork, arosl; FORK.md): ru's driver functions
+# against the nhm mock, which answers with nhm v0.1.2's ntm-typed shapes
+#==============================================================================
+
+NHM_MOCK_DIR=""
+ORIG_PATH="$PATH"
+
+# Usage: use_nhm_mock [scenario] [session]
+use_nhm_mock() {
+    NHM_MOCK_DIR=$(create_temp_dir)
+    export NTM_MOCK_SCENARIO="${1:-ok}"
+    export NTM_MOCK_STATE_FILE="$NHM_MOCK_DIR/state"
+    export NTM_MOCK_LAST_PROMPT="$NHM_MOCK_DIR/prompt"
+    printf '%s\n' "${2:-ru_sweep_repo_$$}" > "$NTM_MOCK_STATE_FILE"
+    PATH="$SCRIPT_DIR/test_bin:$ORIG_PATH"
+}
+
+drop_nhm_mock() {
+    PATH="$ORIG_PATH"
+    unset NTM_MOCK_SCENARIO NTM_MOCK_STATE_FILE NTM_MOCK_LAST_PROMPT NHM_MOCK_KILL
+}
+
+test_nhm_spawn_session() {
+    log_test_start "ntm_spawn_session spawns through nhm --robot-spawn"
+    use_nhm_mock ok
+    local dir out
+    dir=$(create_temp_dir)
+    out=$(ntm_spawn_session "ru_sweep_new_$$" "$dir")
+    assert_equals "0" "$?" "spawn succeeds"
+    assert_equals "true" "$(jq -r '.success' <<<"$out")" "SpawnOutput success"
+    assert_equals "0.1" "$(jq -r '.agents[0].pane' <<<"$out")" "the agent's slot"
+    assert_equals "ru_sweep_new_$$" "$(head -n 1 "$NTM_MOCK_STATE_FILE")" "the session nhm made"
+    drop_nhm_mock
+    log_test_pass "ntm_spawn_session spawns through nhm --robot-spawn"
+}
+
+test_nhm_spawn_session_fails() {
+    log_test_start "ntm_spawn_session passes nhm's error on"
+    use_nhm_mock spawn_fail
+    local dir out code
+    dir=$(create_temp_dir)
+    out=$(ntm_spawn_session "s" "$dir")
+    code=$?
+    assert_not_equals "0" "$code" "spawn fails"
+    assert_equals "INTERNAL_ERROR" "$(jq -r '.error_code' <<<"$out")" "nhm's error code"
+    drop_nhm_mock
+    log_test_pass "ntm_spawn_session passes nhm's error on"
+}
+
+test_nhm_send_prompt_whole() {
+    log_test_start "ntm_send_prompt sends a large prompt once, whole"
+    use_nhm_mock ok
+    local prompt out
+    prompt="$(printf 'line %05d of a long phase prompt\n' $(seq 1 400))"
+    out=$(ntm_send_prompt "s" "$prompt")
+    assert_equals "0" "$?" "send succeeds"
+    assert_equals "0.1" "$(jq -r '.successful[0]' <<<"$out")" "submitted to the agent"
+    assert_equals "$prompt" "$(cat "$NTM_MOCK_LAST_PROMPT")" "the whole prompt, not a chunk"
+    drop_nhm_mock
+    log_test_pass "ntm_send_prompt sends a large prompt once, whole"
+}
+
+test_nhm_wait_completion_codes() {
+    log_test_start "ntm_wait_completion maps nhm --robot-ack to ru's exit codes"
+    local code
+    use_nhm_mock ok
+    ntm_wait_completion "s" 5 >/dev/null
+    assert_equals "0" "$?" "completion: 0"
+    drop_nhm_mock
+    use_nhm_mock timeout
+    ntm_wait_completion "s" 5 >/dev/null
+    code=$?
+    assert_equals "1" "$code" "timed out: 1"
+    drop_nhm_mock
+    use_nhm_mock agent_error
+    ntm_wait_completion "s" 5 >/dev/null
+    code=$?
+    assert_equals "3" "$code" "agent error: 3"
+    drop_nhm_mock
+    log_test_pass "ntm_wait_completion maps nhm --robot-ack to ru's exit codes"
+}
+
+test_nhm_kill_and_interrupt() {
+    log_test_start "kill never fails the sweep; interrupt goes through nhm"
+    use_nhm_mock ok
+    ntm_kill_session "s"
+    assert_equals "0" "$?" "kill returns 0 although nhm 0.1.2 has no kill"
+    ntm_interrupt_session "s"
+    assert_equals "0" "$?" "interrupt succeeds"
+    drop_nhm_mock
+    log_test_pass "kill never fails the sweep; interrupt goes through nhm"
+}
+
+test_nhm_session_exists_and_capture() {
+    log_test_start "sessions come from .sessions[].name; output from --robot-tail"
+    use_nhm_mock ok "ru_sweep_repo_$$"
+    nhm_session_exists "ru_sweep_repo_$$"
+    assert_equals "0" "$?" "a listed session exists"
+    nhm_session_exists "ru_sweep_other_$$"
+    assert_not_equals "0" "$?" "an unlisted session does not"
+    local out
+    out=$(capture_pane_output "ru_sweep_repo_$$" 100)
+    assert_contains "$out" "RU_COMMIT_PLAN_JSON_BEGIN" "the agent pane's text"
+    drop_nhm_mock
+    log_test_pass "sessions come from .sessions[].name; output from --robot-tail"
+}
+
+test_nhm_cleanup_kills_own_sessions() {
+    log_test_start "cleanup_agent_sweep_sessions finds this process's sessions"
+    use_nhm_mock ok "ru_sweep_repo_$$"
+    export NHM_MOCK_KILL=1
+    cleanup_agent_sweep_sessions
+    assert_file_not_exists "$NTM_MOCK_STATE_FILE" "nhm kill ran for ru_sweep_repo_$$"
+    drop_nhm_mock
+    log_test_pass "cleanup_agent_sweep_sessions finds this process's sessions"
+}
+
+test_nhm_review_driver() {
+    log_test_start "the review driver starts, sends, reads state and lists on nhm"
+    use_nhm_mock ok "review-1"
+    local wt state
+    wt=$(create_temp_dir)
+    state=$(ntm_driver_start_session "$wt" "review-1" "Review this repo.")
+    assert_equals "0" "$?" "start succeeds"
+    assert_equals "0.1" "$(jq -r '.pane_id' <<<"$state")" "the pane is nhm's slot"
+    assert_equals "Review this repo." "$(cat "$NTM_MOCK_LAST_PROMPT")" "the prompt went as one send"
+    state=$(ntm_driver_get_session_state "review-1")
+    assert_equals "waiting" "$(jq -r '.state' <<<"$state")" "WAITING maps to waiting"
+    assert_equals "review-1" "$(ntm_driver_list_sessions)" "the session list"
+    ntm_driver_session_alive "review-1"
+    assert_equals "0" "$?" "the session is alive"
+    state=$(ntm_driver_get_session_state "gone")
+    assert_equals "dead" "$(jq -r '.state' <<<"$state")" "an unlisted session is dead"
+    drop_nhm_mock
+    log_test_pass "the review driver starts, sends, reads state and lists on nhm"
+}
+
+NHM_EVENTS=""
+record_nhm_event() {
+    NHM_EVENTS+="$1 $2"$'\n'
+    # End the stream after the first pass: the session disappears.
+    [[ "$1" == "health_alert" ]] && rm -f "$NTM_MOCK_STATE_FILE"
+    return 0
+}
+
+test_nhm_stream_events_health() {
+    log_test_start "stream_events reports the state and an unhealthy session"
+    use_nhm_mock unhealthy "review-2"
+    NHM_EVENTS=""
+    ntm_driver_stream_events "review-2" record_nhm_event 0
+    assert_contains "$NHM_EVENTS" "state_change" "a state change"
+    assert_contains "$NHM_EVENTS" "health_alert" "the session's health"
+    assert_contains "$NHM_EVENTS" "degraded" "nhm's health status"
+    drop_nhm_mock
+    log_test_pass "stream_events reports the state and an unhealthy session"
+}
+
+#==============================================================================
 # Run Tests
 #==============================================================================
 
@@ -647,6 +843,17 @@ run_test test_json_escape_empty
 run_test test_ntm_check_available_not_installed
 run_test test_ntm_check_available_with_mock
 run_test test_ntm_check_available_broken
+
+# The ntm driver on nhm (fork, arosl)
+run_test test_nhm_spawn_session
+run_test test_nhm_spawn_session_fails
+run_test test_nhm_send_prompt_whole
+run_test test_nhm_wait_completion_codes
+run_test test_nhm_kill_and_interrupt
+run_test test_nhm_session_exists_and_capture
+run_test test_nhm_cleanup_kills_own_sessions
+run_test test_nhm_review_driver
+run_test test_nhm_stream_events_health
 
 # has_uncommitted_changes tests
 run_test test_has_uncommitted_changes_clean

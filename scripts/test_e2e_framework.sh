@@ -300,26 +300,28 @@ MOCK_EOF
 # Mock ntm/tmux CLIs
 #==============================================================================
 
-# Create mock ntm/tmux scripts in the E2E mock bin
+# Create mock nhm/tmux scripts in the E2E mock bin
 # Usage: e2e_create_mock_ntm [scenario]
-# Scenario defaults to "ok" (see scripts/test_bin/ntm for options)
+# Scenario defaults to "ok" (see scripts/test_bin/nhm for options). Fork
+# (arosl): ru's ntm driver runs nhm; the nhm mock reads its pane text from
+# the tmux mock beside it.
 e2e_create_mock_ntm() {
     local scenario="${1:-ok}"
 
     e2e_log_operation "create_mock_ntm" "scenario=$scenario" "setup"
 
     local source_dir="$E2E_PROJECT_DIR/scripts/test_bin"
-    local ntm_src="$source_dir/ntm"
+    local nhm_src="$source_dir/nhm"
     local tmux_src="$source_dir/tmux"
 
-    if [[ ! -f "$ntm_src" || ! -f "$tmux_src" ]]; then
+    if [[ ! -f "$nhm_src" || ! -f "$tmux_src" ]]; then
         e2e_log_result "create_mock_ntm" "fail" 0 "missing mock scripts"
         return 1
     fi
 
-    cp "$ntm_src" "$E2E_MOCK_BIN/ntm"
+    cp "$nhm_src" "$E2E_MOCK_BIN/nhm"
     cp "$tmux_src" "$E2E_MOCK_BIN/tmux"
-    chmod +x "$E2E_MOCK_BIN/ntm" "$E2E_MOCK_BIN/tmux"
+    chmod +x "$E2E_MOCK_BIN/nhm" "$E2E_MOCK_BIN/tmux"
 
     export NTM_MOCK_SCENARIO="$scenario"
     export NTM_MOCK_STATE_FILE="$E2E_TEMP_DIR/ntm_mock_state"

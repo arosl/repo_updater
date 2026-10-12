@@ -1502,13 +1502,13 @@ spawn_ai_session() {
         activity=$(nhm --robot-activity="$session_name" 2>/dev/null | \
             jq -r '.agents[0].state // "UNKNOWN"' 2>/dev/null)
 
-        if [[ "$activity" == "WAITING" || "$activity" == "IDLE" || "$activity" == "STALLED" ]]; then
+        if [[ "$activity" == "WAITING" || "$activity" == "STALLED" ]]; then
             # Agent appears to be done - give it a moment then check again
             sleep 5
             activity=$(nhm --robot-activity="$session_name" 2>/dev/null | \
                 jq -r '.agents[0].state // "UNKNOWN"' 2>/dev/null)
 
-            if [[ "$activity" == "WAITING" || "$activity" == "IDLE" || "$activity" == "STALLED" ]]; then
+            if [[ "$activity" == "WAITING" || "$activity" == "STALLED" ]]; then
                 status="completed"
                 break
             fi
@@ -13541,10 +13541,16 @@ ntm_wait_completion() {
     # Wait for a full processing cycle. Fork (arosl): nhm's --robot-ack waits
     # for the completion of the session's latest send, as ntm's --robot-wait
     # --transition waited for the agent to leave WAITING and return to it.
-    # Its exit code is 0 or 1; ru's codes come from its answer.
+    # Its exit code is 0 or 1; ru's codes come from its answer. A target that
+    # only started before the timeout is a confirmation too (ack_type
+    # output_started, exit 0): the phase is done only when every
+    # confirmation is prompt_returned.
     output=$(nhm --robot-ack="$session" --timeout="${timeout}s" 2>&1)
     exit_code=$?
-    if [[ $exit_code -ne 0 ]]; then
+    if [[ $exit_code -eq 0 ]] && ! jq -e '(.confirmations // []) as $c
+            | ($c | length) > 0 and all($c[]; .ack_type == "prompt_returned")' <<<"$output" >/dev/null 2>&1; then
+        exit_code=1
+    elif [[ $exit_code -ne 0 ]]; then
         if [[ "$(jq -r '.timed_out // false' <<<"$output" 2>/dev/null)" == "true" ]]; then
             exit_code=1
         elif [[ "$(jq -r '(.failed // []) | length' <<<"$output" 2>/dev/null)" =~ ^[1-9] ]]; then
@@ -13924,7 +13930,7 @@ ntm_driver_stream_events() {
         # health, when it is not healthy, is the alert. nhm health exits
         # non-zero on a critical status, so its output is read either way.
         local health_json alerts
-        health_json=$(nhm health "$session_id" --json 2>/dev/null) || true
+        health_json=$(nhm health "$session_id" --json --no-mail 2>/dev/null) || true
         alerts=$(echo "$health_json" | jq -c --arg s "$session_id" \
             '[.result.sessions[]? | select(.name == $s and .health.status != "healthy") | .health]' 2>/dev/null)
         if [[ -n "$alerts" && "$alerts" != "[]" ]]; then

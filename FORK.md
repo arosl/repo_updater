@@ -23,7 +23,7 @@ easy. The local driver (tmux and stream-json) is upstream's, unchanged.
 | `ntm_check_available`, `detect_review_driver`, `doctor`, the `ai-sync` and `dep-update` checks | `ntm`, `ntm --robot-status` | `nhm`, `nhm --robot-status` |
 | `ntm_spawn_session` | `ntm --robot-spawn=S --spawn-cc=1 --spawn-wait --spawn-dir=D` | the same flags on `nhm` |
 | `ntm_send_prompt` | `--robot-send=S --msg=…`, in 3.5 KB chunks above 4 KB | one `nhm --robot-send=S --type=claude --msg-file=-`, the prompt on stdin. nhm has no tmux SendKeys limit, and each chunk would be a prompt of its own. `ntm_send_prompt_chunked` is gone |
-| `ntm_wait_completion` | `--robot-wait=S --condition=idle --transition` | `nhm --robot-ack=S --timeout=…`: it waits for the completion of the session's latest send. ru's exit codes come from its answer: 0 completed, 1 `timed_out`, 3 an entry in `failed`, 2 otherwise |
+| `ntm_wait_completion` | `--robot-wait=S --condition=idle --transition` | `nhm --robot-ack=S --timeout=…`: it waits for the completion of the session's latest send. ru's exit codes come from its answer: 0 only when every confirmation is `prompt_returned`; 1 `timed_out`, or an agent that only started (`output_started`, which nhm reports with exit 0); 3 an entry in `failed`; 2 otherwise |
 | `ntm_interrupt_session`, `ntm_driver_interrupt_session` | `--robot-interrupt=S`, `tmux send-keys C-c` | `nhm interrupt S` (each agent's own interrupt key) |
 | `ntm_kill_session`, `ntm_driver_stop_session`, `kill_ai_session` | `ntm kill S -f`, `tmux kill-session` | `nhm kill S -f` (see the gaps) |
 | `cleanup_agent_sweep_sessions`, `ntm_driver_list_sessions` | grep on `"name":"ru_sweep_…"`, `.sessions \| keys[]` | jq on `.sessions[].name`: ntm's status lists sessions in an array |

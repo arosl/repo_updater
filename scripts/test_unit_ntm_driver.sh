@@ -736,6 +736,12 @@ test_nhm_wait_completion_codes() {
     code=$?
     assert_equals "3" "$code" "agent error: 3"
     drop_nhm_mock
+    # nhm answers exit 0 for an agent that only started: not done yet.
+    use_nhm_mock started
+    ntm_wait_completion "s" 5 >/dev/null
+    code=$?
+    assert_equals "1" "$code" "started but not finished: 1, not 0"
+    drop_nhm_mock
     log_test_pass "ntm_wait_completion maps nhm --robot-ack to ru's exit codes"
 }
 

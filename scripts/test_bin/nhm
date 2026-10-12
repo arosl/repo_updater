@@ -94,6 +94,13 @@ handle_ack() {
                 confirmations: [], pending: [], failed: [{pane: "0.1", reason: "agent is blocked"}],
                 timeout_ms: 1000, timed_out: false, error: "1 agent cannot acknowledge", error_code: "AGENT_ERROR"}'
             exit 1 ;;
+        started)
+            # The agent started but did not finish before the timeout: nhm
+            # still answers success and exit 0, with output_started.
+            jq -n --arg s "$session" '{success: true, version: "1.0.0", output_format: "json", session: $s,
+                confirmations: [{pane: "0.1", ack_type: "output_started", ack_at: "2026-10-12T00:00:00Z", latency_ms: 900}],
+                pending: [], failed: [], timeout_ms: 1000, timed_out: false}'
+            exit 0 ;;
     esac
     jq -n --arg s "$session" '{success: true, version: "1.0.0", output_format: "json", session: $s,
         confirmations: [{pane: "0.1", ack_type: "prompt_returned", ack_at: "2026-10-12T00:00:00Z", latency_ms: 1200}],

@@ -223,7 +223,8 @@ test_version_matches() {
     e2e_setup
 
     local ru_version
-    ru_version=$("$E2E_RU_SCRIPT" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    # Fork (arosl): the fork's versions carry a suffix, as 1.5.0-nhm.1.
+    ru_version=$("$E2E_RU_SCRIPT" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -1)
 
     local doc_version
     doc_version=$("$E2E_RU_SCRIPT" robot-docs quickstart 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])" 2>/dev/null)

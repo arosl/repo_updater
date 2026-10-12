@@ -29,8 +29,10 @@ concurrency:
 
 jobs:
   notify-acfs:
-    # Only notify on push to main, not PRs
-    if: github.event_name == 'push'
+    # Only notify on push to main, not PRs. Fork (arosl): only in upstream's
+    # repository; the fork has no ACFS_DISPATCH_TOKEN, and the ACFS fork pins
+    # ru by tag (FORK.md).
+    if: github.event_name == 'push' && github.repository == 'Dicklesworthstone/repo_updater'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

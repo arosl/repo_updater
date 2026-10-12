@@ -45,7 +45,8 @@ set -uo pipefail
 # CONSTANTS
 #==============================================================================
 
-REPO_OWNER="Dicklesworthstone"
+# Fork (arosl): install the fork's releases (FORK.md).
+REPO_OWNER="arosl"
 REPO_NAME="repo_updater"
 SCRIPT_NAME="ru"
 GITHUB_RAW="https://raw.githubusercontent.com"
@@ -282,22 +283,18 @@ install_ntm() {
     return 1
 }
 
-# Run ntm integration (check, prompt, install)
+# Run ntm integration (check, prompt, install). Fork (arosl): ru's ntm
+# driver runs nhm, ntm's herdr counterpart, which ACFS installs; ntm is never
+# installed (FORK.md).
 maybe_install_ntm() {
-    # Skip if already installed
-    if check_ntm_installed; then
-        log_info "ntm detected: $(get_ntm_version)"
+    if command -v nhm &>/dev/null; then
+        log_info "nhm detected: $(nhm --version 2>/dev/null | head -1)"
         log_info "ru agent-sweep is available"
         return 0
     fi
 
-    # Prompt user
-    if prompt_ntm_install; then
-        install_ntm
-    else
-        log_info "Skipped ntm installation"
-        log_info "You can install it later to enable: ru agent-sweep"
-    fi
+    log_info "nhm not found: ACFS installs it (or see https://github.com/arosl/nhm)"
+    log_info "Install it to enable: ru agent-sweep"
 }
 
 # Self-refresh the installer when executed from a pipe (/dev/fd/*), to avoid

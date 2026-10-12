@@ -86,26 +86,27 @@ done
 
 url_no_query="${url%%\?*}"
 
-if [[ "$url_no_query" == "https://api.github.com/repos/Dicklesworthstone/repo_updater/releases/latest" ]]; then
+# Fork (arosl): the installer fetches the fork's releases (FORK.md).
+if [[ "$url_no_query" == "https://api.github.com/repos/arosl/repo_updater/releases/latest" ]]; then
     echo "mock curl: unexpected GitHub API call: $url" >&2
     exit 22
 fi
 
-if [[ "$url_no_query" == "https://github.com/Dicklesworthstone/repo_updater/releases/latest/download/ru" ]]; then
+if [[ "$url_no_query" == "https://github.com/arosl/repo_updater/releases/latest/download/ru" ]]; then
     echo "Not Found" >&2
     exit 22
 fi
 
-if [[ "$url_no_query" == "https://github.com/Dicklesworthstone/repo_updater/releases/latest" ]]; then
+if [[ "$url_no_query" == "https://github.com/arosl/repo_updater/releases/latest" ]]; then
     if [[ -n "$write_out" ]]; then
-        printf '%s' "https://github.com/Dicklesworthstone/repo_updater/releases"
+        printf '%s' "https://github.com/arosl/repo_updater/releases"
         exit 0
     fi
     printf '%s' ""
     exit 0
 fi
 
-if [[ "$url_no_query" == "https://raw.githubusercontent.com/Dicklesworthstone/repo_updater/main/ru" ]]; then
+if [[ "$url_no_query" == "https://raw.githubusercontent.com/arosl/repo_updater/main/ru" ]]; then
     if [[ "$url" != *"ru_cb="* ]]; then
         echo "mock curl: expected ru_cb cache buster in URL: $url" >&2
         exit 2

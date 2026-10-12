@@ -35,6 +35,15 @@ easy. The local driver (tmux and stream-json) is upstream's, unchanged.
 | a session exists | `tmux has-session` | `nhm_session_exists`: `nhm --robot-status` lists it |
 | `spawn_ai_session` | `ntm spawn S --cc=1 --no-user`, `tmux send-keys "cd …"`, `ntm send S --cc --file F` | `nhm --robot-spawn=S --spawn-cc=1 --spawn-no-user --spawn-wait --spawn-dir=<repo>`, `nhm send S --cc --file F` |
 | `error_ntm_spawn_failed` | `ntm doctor`, `ntm list` | `nhm doctor`, `nhm list` |
+| `RU_REPO_OWNER` (`self-update`), the robot-docs install line | `Dicklesworthstone` | `arosl`: ru updates from the fork's releases |
+| `VERSION=`, `VERSION` | `1.5.0` | `1.5.0-nhm.1`, the fork's release version (see Releases) |
+
+Installer and workflows:
+
+| File | Change |
+|---|---|
+| `install.sh` | `REPO_OWNER="arosl"`: it installs the fork's releases. `maybe_install_ntm` never installs ntm; it reports nhm, or says that ACFS installs it |
+| `.github/workflows/notify-acfs.yml` | the job runs only in upstream's repository; the fork has no `ACFS_DISPATCH_TOKEN`, and the ACFS fork pins ru by tag |
 
 Tests:
 
@@ -43,7 +52,20 @@ Tests:
 | `scripts/test_bin/nhm` | new: a mock nhm. It answers with the shapes nhm v0.1.2 printed against its own stub herdr, cut to the fields ru reads, and takes its pane text from the tmux mock beside it |
 | `scripts/test_e2e_framework.sh` | `e2e_create_mock_ntm` copies the nhm mock in place of the ntm mock |
 | `scripts/test_unit_ntm_driver.sh` | the `ntm_check_available` mocks are named `nhm`; nine tests of the driver functions against the nhm mock (ACFS rehearsal step E21.b) |
+| `scripts/test_e2e_install.sh` | the mock curl answers for the fork's release URLs |
 | `FORK.md` | this file |
+
+## Releases
+
+The fork tags `v<upstream version>-nhm.<n>` (for example `v1.5.0-nhm.1`) on
+its `main`. Upstream's `release.yml` requires that `VERSION=` in `ru` and
+the `VERSION` file equal the tag, so the version changes in a commit before
+the tag. The workflow then publishes `ru`, `install.sh` and their `.sha256`
+files. Its release notes still name upstream's URLs. `install.sh` and
+`ru self-update` take the fork's latest release. The ACFS fork pins the
+tagged `install.sh` in `checksums.yaml` and runs it with `RU_VERSION` set,
+so "latest" never decides the version it installs (ACFS bead
+acfs-9hkh.64).
 
 ## Gaps
 
@@ -58,11 +80,6 @@ handles any failed ntm call:
   Close it in herdr.
 - **Ownership.** Before ACFS's takeover (`nhm admin takeover`), ACFS's Bash
   owns the herdr server, and nhm refuses to spawn, send or interrupt.
-- **Releases.** The fork has no release yet. `install.sh` and
-  `ru self-update` still fetch upstream's releases (`REPO_OWNER`,
-  `RU_REPO_OWNER`), so a self-update replaces this fork with upstream's ru,
-  and `install.sh` offers to install ntm. The fork's release, the two owners
-  and ACFS's pin come together in one step (ACFS bead acfs-9hkh.64).
 - **gemini.** nhm has no gemini kind. `--agent=gemini` fails in
   `spawn_ai_session` with "unknown agent type". The help text still lists
   gemini, as upstream's does.

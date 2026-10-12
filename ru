@@ -120,7 +120,7 @@ fi
 #==============================================================================
 
 # Version: read from VERSION file, fallback to embedded
-VERSION="1.5.0"
+VERSION="1.5.0-nhm.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/VERSION" ]]; then
     VERSION="$(cat "$SCRIPT_DIR/VERSION")"
@@ -128,7 +128,8 @@ fi
 
 # GitHub repository constants (for self-update - used by cmd_self_update bd-1006)
 # shellcheck disable=SC2034
-RU_REPO_OWNER="Dicklesworthstone"
+# Fork (arosl): self-update takes the fork's releases (FORK.md).
+RU_REPO_OWNER="arosl"
 # shellcheck disable=SC2034
 RU_REPO_NAME="repo_updater"
 # shellcheck disable=SC2034
@@ -23128,7 +23129,7 @@ _robot_docs_quickstart() {
     cat << 'QSJSON'
 {
   "description": "ru (repo_updater) synchronizes GitHub repositories to a local projects directory.",
-  "install": "curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/repo_updater/main/install.sh | bash",
+  "install": "curl -fsSL https://raw.githubusercontent.com/arosl/repo_updater/main/install.sh | bash",
   "first_run": [
     {"step": 1, "command": "ru init", "description": "Initialize configuration directory and example repo list"},
     {"step": 2, "command": "ru add owner/repo", "description": "Add a repository to sync"},

@@ -65,6 +65,9 @@ source_ru_function_with_heredocs "ntm_driver_get_session_state"
 source_ru_function "ntm_driver_list_sessions"
 source_ru_function "ntm_driver_session_alive"
 source_ru_function "ntm_driver_stream_events"
+source_ru_function "ntm_driver_stop_session"
+source_ru_function "is_session_active"
+source_ru_function "kill_ai_session"
 
 # Define the denylist patterns (needed for is_file_denied tests)
 # This matches the patterns in ru's AGENT_SWEEP_DENYLIST_PATTERNS array
@@ -780,6 +783,23 @@ test_nhm_cleanup_kills_own_sessions() {
     log_test_pass "cleanup_agent_sweep_sessions finds this process's sessions"
 }
 
+test_nhm_stop_and_kill_close_the_session() {
+    log_test_start "the driver's stop and kill_ai_session pass -f/--force and --no-beads"
+    use_nhm_mock ok "review-3"
+    export NHM_MOCK_KILL=1
+    ntm_driver_stop_session "review-3"
+    assert_equals "0" "$?" "stop succeeds"
+    assert_file_not_exists "$NTM_MOCK_STATE_FILE" "nhm kill ran for review-3"
+    drop_nhm_mock
+    use_nhm_mock ok "ai-sync-1"
+    export NHM_MOCK_KILL=1
+    kill_ai_session "ai-sync-1"
+    assert_equals "0" "$?" "kill_ai_session succeeds"
+    assert_file_not_exists "$NTM_MOCK_STATE_FILE" "nhm kill ran for ai-sync-1"
+    drop_nhm_mock
+    log_test_pass "the driver's stop and kill_ai_session pass -f/--force and --no-beads"
+}
+
 test_nhm_review_driver() {
     log_test_start "the review driver starts, sends, reads state and lists on nhm"
     use_nhm_mock ok "review-1"
@@ -858,6 +878,7 @@ run_test test_nhm_wait_completion_codes
 run_test test_nhm_kill_and_interrupt
 run_test test_nhm_session_exists_and_capture
 run_test test_nhm_cleanup_kills_own_sessions
+run_test test_nhm_stop_and_kill_close_the_session
 run_test test_nhm_review_driver
 run_test test_nhm_stream_events_health
 

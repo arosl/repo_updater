@@ -1473,7 +1473,7 @@ spawn_ai_session() {
     # Send the prompt from file
     if ! nhm send "$session_name" "$send_flag" --file "$prompt_file" >/dev/null 2>&1; then
         log_error "spawn_ai_session: Failed to send prompt"
-        nhm kill "$session_name" --force >/dev/null 2>&1
+        nhm kill "$session_name" --force --no-beads >/dev/null 2>&1
         echo '{"session":"'"$session_name"'","status":"failed","error":"send prompt failed"}'
         return 2
     fi
@@ -1521,9 +1521,9 @@ spawn_ai_session() {
     end_time=$(date +%s)
     local duration=$((end_time - start_time))
 
-    # Clean up the session (fork, arosl: nhm's kill comes with nhm.lifecycle)
+    # Clean up the session (fork, arosl: ru's agents work no beads, FORK.md)
     if nhm_session_exists "$session_name"; then
-        nhm kill "$session_name" --force >/dev/null 2>&1
+        nhm kill "$session_name" --force --no-beads >/dev/null 2>&1
     fi
 
     # Return results
@@ -1557,7 +1557,7 @@ kill_ai_session() {
     fi
 
     if is_session_active "$session_name"; then
-        nhm kill "$session_name" --force >/dev/null 2>&1
+        nhm kill "$session_name" --force --no-beads >/dev/null 2>&1
         return $?
     fi
     return 0
@@ -13579,9 +13579,9 @@ ntm_wait_completion() {
 ntm_kill_session() {
     local session="${1:-}"
     [[ -z "$session" ]] && return 0
-    # -f flag prevents confirmation prompt. Fork (arosl): nhm's kill comes
-    # with nhm.lifecycle; until then this leaves the session open (FORK.md).
-    nhm kill "$session" -f >/dev/null 2>&1 || true
+    # -f flag prevents confirmation prompt. Fork (arosl): ru's agents work
+    # no beads (FORK.md).
+    nhm kill "$session" -f --no-beads >/dev/null 2>&1 || true
     return 0
 }
 
@@ -13879,8 +13879,8 @@ EOF
 ntm_driver_stop_session() {
     local session_id="$1"
     if nhm_session_exists "$session_id"; then
-        # Fork (arosl): nhm's kill comes with nhm.lifecycle (FORK.md).
-        nhm kill "$session_id" -f >/dev/null 2>&1
+        # Fork (arosl): ru's agents work no beads (FORK.md).
+        nhm kill "$session_id" -f --no-beads >/dev/null 2>&1
         return $?
     fi
     return 0

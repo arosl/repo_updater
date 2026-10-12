@@ -4,8 +4,9 @@
 # the ones nhm v0.1.2 printed against its own stub herdr, cut to the fields
 # ru reads. Behavior is controlled by NTM_MOCK_SCENARIO, as for the ntm and
 # tmux mocks; the pane text comes from the tmux mock beside this file.
-# NHM_MOCK_KILL=1 answers `kill` (nhm.lifecycle); without it, `kill` is an
-# unknown command, as in nhm 0.1.2.
+# NHM_MOCK_KILL=1 answers `kill` as nhm does in a repo with no .beads: it
+# closes the session only with -f, --force or --yes, and --no-beads
+# (acfs-9hkh.91). Without it, `kill` is an unknown command, as in nhm 0.1.2.
 
 set -uo pipefail
 
@@ -165,6 +166,21 @@ case "$cmd" in
     kill)
         if [[ "${NHM_MOCK_KILL:-}" != "1" ]]; then
             echo 'nhm: unknown command "kill"' >&2
+            exit 2
+        fi
+        yes="" no_beads=""
+        for arg in "$@"; do
+            case "$arg" in
+                -f|--force|--yes) yes=1 ;;
+                --no-beads) no_beads=1 ;;
+            esac
+        done
+        if [[ -z "$no_beads" ]]; then
+            echo "nhm: kill refused: br cannot be read: no bead database" >&2
+            exit 2
+        fi
+        if [[ -z "$yes" ]]; then
+            echo "nhm: kill refused: kill closes the workspace and retires its agents: give --yes" >&2
             exit 2
         fi
         rm -f -- "$state_file"

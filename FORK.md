@@ -60,8 +60,13 @@ Tests:
 The fork tags `v<upstream version>-nhm.<n>` (for example `v1.5.0-nhm.1`) on
 its `main`. Upstream's `release.yml` requires that `VERSION=` in `ru` and
 the `VERSION` file equal the tag, so the version changes in a commit before
-the tag. The workflow then publishes `ru`, `install.sh` and their `.sha256`
-files. Its release notes still name upstream's URLs. `install.sh` and
+the tag. On this fork, a tag push starts no workflow run, and `release.yml`
+has no manual trigger. So a release is made by hand, exactly as the
+workflow does: check the two versions against the tag, make
+`checksums.txt`, `ru.sha256` and `install.sh.sha256` from the tag's own
+`ru` and `install.sh`, and publish the five files as the tag's release
+(`v1.5.0-nhm.1` was made this way). Upstream's release notes name
+upstream's URLs; a fork release does not copy them. `install.sh` and
 `ru self-update` take the fork's latest release. The ACFS fork pins the
 tagged `install.sh` in `checksums.yaml` and runs it with `RU_VERSION` set,
 so "latest" never decides the version it installs (ACFS bead

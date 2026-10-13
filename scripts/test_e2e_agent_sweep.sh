@@ -5,6 +5,7 @@
 # Coverage:
 # - dry-run listing of dirty repos
 # - json dry-run output
+# - no tmux needed: nhm runs the sessions (fork)
 # - single repo success with ntm/tmux mocks
 # - preflight rebase detection
 #
@@ -83,6 +84,26 @@ test_agent_sweep_json_dry_run() {
     log_test_pass "$test_name"
 }
 
+# Fork (arosl): nhm runs the sweep's sessions in herdr, so a host without
+# tmux passes the preflight.
+test_agent_sweep_needs_no_tmux() {
+    local test_name="agent-sweep: no tmux needed (fork)"
+    log_test_start "$test_name"
+
+    e2e_setup
+    e2e_create_mock_ntm
+    rm -f "$E2E_MOCK_BIN/tmux"
+    e2e_init_ru
+
+    create_dirty_repo "testrepo" >/dev/null
+    e2e_add_repo "example/testrepo"
+
+    e2e_assert_ru_exit 0 "agent-sweep --dry-run" "dry-run without tmux exits 0"
+
+    e2e_cleanup
+    log_test_pass "$test_name"
+}
+
 test_agent_sweep_single_repo_success() {
     local test_name="agent-sweep: single repo succeeds with mocks"
     log_test_start "$test_name"
@@ -128,6 +149,7 @@ test_preflight_rebase_in_progress() {
 setup_cleanup_trap
 run_test test_agent_sweep_dry_run_lists_repo
 run_test test_agent_sweep_json_dry_run
+run_test test_agent_sweep_needs_no_tmux
 run_test test_agent_sweep_single_repo_success
 run_test test_preflight_rebase_in_progress
 print_results

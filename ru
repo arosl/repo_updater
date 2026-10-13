@@ -22265,13 +22265,9 @@ cmd_agent_sweep() {
         return 3
     fi
 
-    # Check tmux availability
-    if ! command -v tmux &>/dev/null; then
-        log_error "tmux is required for agent-sweep"
-        release_lock
-        return 3
-    fi
-    log_debug "ntm and tmux availability confirmed"
+    # Fork (arosl): nhm runs the sweep's sessions in herdr, so the sweep
+    # needs no tmux (FORK.md).
+    log_debug "nhm availability confirmed"
 
     # Load all configured repos
     log_verbose "Loading configured repositories..."
@@ -22404,7 +22400,8 @@ cmd_agent_sweep() {
     if [[ "$attach_on_fail" == true && $sweep_exit -ne 0 ]]; then
         local failed_session
         failed_session=$(get_first_failed_session)
-        [[ -n "$failed_session" ]] && tmux attach-session -t "$failed_session" 2>/dev/null || true
+        # Fork (arosl): nhm focuses the session's workspace in herdr.
+        [[ -n "$failed_session" ]] && nhm attach "$failed_session" >/dev/null 2>&1 || true
     fi
 
     # Cleanup

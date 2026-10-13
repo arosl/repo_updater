@@ -27,6 +27,8 @@ easy. The local driver (tmux and stream-json) is upstream's, unchanged.
 | `ntm_interrupt_session`, `ntm_driver_interrupt_session` | `--robot-interrupt=S`, `tmux send-keys C-c` | `nhm interrupt S` (each agent's own interrupt key) |
 | `ntm_kill_session`, `ntm_driver_stop_session`, `kill_ai_session`, `spawn_ai_session` | `ntm kill S -f` (`--force`), `tmux kill-session` | `nhm kill S -f --no-beads` (`--force`): ru's agents work no beads. nhm's kill runs retire's checks for each agent first, so an agent that still works keeps its session open, where ntm's kill ends it (see the gaps) |
 | `cleanup_agent_sweep_sessions`, `ntm_driver_list_sessions` | grep on `"name":"ru_sweep_…"`, `.sessions \| keys[]` | jq on `.sessions[].name`: ntm's status lists sessions in an array |
+| `cmd_agent_sweep`'s preflight | `tmux` required, after the ntm check | no tmux check: nhm runs the sweep's sessions in herdr (`ntm_check_available` checks nhm) |
+| `cmd_agent_sweep --attach-on-fail` | `tmux attach-session -t S` | `nhm attach S`: it focuses the session's workspace, so a herdr client shows it |
 | `capture_pane_output`, `capture_pane_tail` | `tmux capture-pane -t S:0.1` | `nhm --robot-tail=S --lines=N`, slot `0.1`, else the first pane |
 | `ntm_driver_get_session_state`, `ntm_driver_stream_events`, the `spawn_ai_session` poll | `--robot-activity=<pane>` `.state`, `ntm health` `.panes[0].activity` | `nhm --robot-activity=S` `.agents[0].state` (ntm's `ActivityOutput`); `WAITING`, `IDLE` and `STALLED` count as done where upstream read `idle` and `stale` |
 | `ntm_driver_stream_events` health | `--robot-health=S` `.alerts` | `nhm health S --json`: the session's own health, when it is not `healthy`, is the alert |
@@ -53,6 +55,7 @@ Tests:
 | `scripts/test_e2e_framework.sh` | `e2e_create_mock_ntm` copies the nhm mock in place of the ntm mock |
 | `scripts/test_unit_ntm_driver.sh` | the `ntm_check_available` mocks are named `nhm`; nine tests of the driver functions against the nhm mock (ACFS rehearsal step E21.b) |
 | `scripts/test_e2e_install.sh` | the mock curl answers for the fork's release URLs |
+| `scripts/test_e2e_agent_sweep.sh` | one test: a dry run on a host without tmux passes the preflight |
 | `FORK.md` | this file |
 
 ## Releases

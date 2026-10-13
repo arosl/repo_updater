@@ -38,7 +38,7 @@ easy. The local driver (tmux and stream-json) is upstream's, unchanged.
 | `spawn_ai_session` | `ntm spawn S --cc=1 --no-user`, `tmux send-keys "cd …"`, `ntm send S --cc --file F` | `nhm --robot-spawn=S --spawn-cc=1 --spawn-no-user --spawn-wait --spawn-dir=<repo>`, `nhm send S --cc --file F` |
 | `error_ntm_spawn_failed` | `ntm doctor`, `ntm list` | `nhm doctor`, `nhm list` |
 | `RU_REPO_OWNER` (`self-update`), the robot-docs install line | `Dicklesworthstone` | `arosl`: ru updates from the fork's releases |
-| `VERSION=`, `VERSION` | `1.5.0` | `1.5.0-nhm.1`, the fork's release version (see Releases) |
+| `VERSION=`, `VERSION` | `1.5.0` | `1.5.0-nhm.2`, the fork's release version (see Releases) |
 
 Installer and workflows:
 
